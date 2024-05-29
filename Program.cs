@@ -1,7 +1,13 @@
 ﻿using MassTransit;
+using MassTransitRabbitMQPOC.Configurations;
+using MassTransitRabbitMQPOC.Consumers;
+using MassTransitRabbitMQPOC.Publishers;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using HealthChecks.RabbitMQ;
 
 namespace MassTransitRabbitMQPOC
 {
@@ -23,15 +29,31 @@ namespace MassTransitRabbitMQPOC
 
         public static IHostBuilder CreateHostBuilder(string[] args) =>
             Host.CreateDefaultBuilder(args)
+                .ConfigureAppConfiguration((hostingContext, config) =>
+                {
+                    config.AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
+                })
                 .ConfigureServices((hostContext, services) =>
                 {
+                    services.Configure<RabbitMqOptions>(hostContext.Configuration.GetSection("RabbitMQ"));
+
                     services.AddMassTransit(x =>
                     {
                         x.AddConsumer<MessageConsumer>();
 
                         x.UsingRabbitMq((context, cfg) =>
                         {
-                            cfg.Host("localhost", "/", h => { });
+                            var rabbitMqOptions = context.GetRequiredService<IOptions<RabbitMqOptions>>().Value;
+
+                            var host = rabbitMqOptions.Host ?? "localhost";
+                            var username = rabbitMqOptions.Username ?? "guest";
+                            var password = rabbitMqOptions.Password ?? "guest";
+
+                            cfg.Host(host, "/", h =>
+                            {
+                                h.Username(username);
+                                h.Password(password);
+                            });
 
                             cfg.ReceiveEndpoint("message-queue", e =>
                             {
@@ -40,7 +62,20 @@ namespace MassTransitRabbitMQPOC
                         });
                     });
 
-                    //services.AddMassTransitHostedService();
+                    services.AddLogging(logging =>
+                    {
+                        logging.ClearProviders();
+                        logging.AddConsole();
+                    });
+
+                    var rabbitMqHost = hostContext.Configuration["RabbitMQ:Host"] ?? "localhost";
+                    var rabbitMqUsername = hostContext.Configuration["RabbitMQ:Username"] ?? "guest";
+                    var rabbitMqPassword = hostContext.Configuration["RabbitMQ:Password"] ?? "guest";
+
+                    var rabbitMqConnectionString = $"amqp://{rabbitMqUsername}:{rabbitMqPassword}@{rabbitMqHost}";
+
+                    services.AddHealthChecks()
+                        .AddRabbitMQ(rabbitConnectionString: rabbitMqConnectionString);
                 });
     }
 }
